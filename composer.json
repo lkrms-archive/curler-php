@@ -2,10 +2,14 @@
     "name": "lkrms/curler",
     "type": "library",
     "license": "MIT",
-    "description": "PHP library for easy consumption of REST APIs",
+    "description": "Library for easy consumption of REST APIs",
+    "require": {
+        "php": "^7.2",
+        "lib-curl": "*"
+    },
     "autoload": {
         "psr-4": {
-            "Curler\\": "src/"
+            "Lkrms\\Curler\\": "src/"
         }
     }
 }

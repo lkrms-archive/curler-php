@@ -1,6 +1,6 @@
 <?php
 
-namespace Curler;
+namespace Lkrms\Curler;
 
 class CurlerHeader
 {
@@ -12,7 +12,7 @@ class CurlerHeader
         $value  = trim($value);
 
         // HTTP headers are case-insensitive, so make sure we don't end up with duplicates
-        $this->Headers[strtolower($name)] = "{$name}:{$value}";
+        $this->Headers [strtolower($name)] = "{$name}:{$value}";
     }
 
     public function GetHeaders()
