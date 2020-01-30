@@ -1,5 +1,7 @@
 <?php
 
+declare(strict_types=1);
+
 namespace Lkrms\Curler;
 use Exception;
 
@@ -8,6 +10,12 @@ class Curler
     private $BaseUrl;
 
     private $Headers;
+
+    private $LastCurlInfo;
+
+    private $LastResponse;
+
+    private $LastResponseCode;
 
     private $LastResponseHeaders;
 
@@ -19,58 +27,43 @@ class Curler
 
     private static $ResponseHeaders;
 
-    public function __construct($baseUrl, CurlerHeader $headers)
+    public function __construct(string $baseUrl, CurlerHeader $headers)
     {
-        if (is_null($headers) || ! ($headers instanceof CurlerHeader))
-        {
-            throw new Exception('Invalid headers.');
-        }
-
         $this->BaseUrl  = $baseUrl;
         $this->Headers  = $headers;
 
         if ( ! is_resource(self::$Curl))
         {
             self::$Curl = curl_init();
-            $this->Reset();
-        }
-    }
 
-    private function Reset()
-    {
-        curl_reset(self::$Curl);
+            // don't send output to browser
+            curl_setopt(self::$Curl, CURLOPT_RETURNTRANSFER, true);
 
-        // don't send output to browser
-        curl_setopt(self::$Curl, CURLOPT_RETURNTRANSFER, true);
+            // collect response headers
+            curl_setopt(self::$Curl, CURLOPT_HEADERFUNCTION,
 
-        // fail if HTTP response code is >=400, rather than returning the error page
-        curl_setopt(self::$Curl, CURLOPT_FAILONERROR, true);
-
-        // collect response headers
-        curl_setopt(self::$Curl, CURLOPT_HEADERFUNCTION,
-
-        function ($curl, $header)
-        {
-            $split = explode(':', $header, 2);
-
-            if (count($split) == 2)
+            function ($curl, $header)
             {
-                list ($name, $value) = $split;
+                $split = explode(':', $header, 2);
 
-                // tidy up any stray spaces
-                self::$ResponseHeaders[trim($name)] = trim($value);
+                if (count($split) == 2)
+                {
+                    list ($name, $value) = $split;
+
+                    // header field names are case-insensitive
+                    $name   = strtolower($name);
+                    $value  = trim($value);
+                    self::$ResponseHeaders[$name] = $value;
+                }
+
+                return strlen($header);
             }
 
-            return strlen($header);
+            );
         }
-
-        );
-
-        // clear any previous response headers
-        self::$ResponseHeaders = array();
     }
 
-    private function HttpBuildQuery($queryData)
+    private function HttpBuildQuery($queryData) : string
     {
         $query = http_build_query($queryData);
 
@@ -82,7 +75,7 @@ class Curler
         return $query;
     }
 
-    private function Initialise($requestType = 'GET', array $queryString = null)
+    private function Initialise($requestType, ? array $queryString)
     {
         $query = '';
 
@@ -102,7 +95,8 @@ class Curler
         {
             case 'GET':
 
-                // nothing to do -- GET is the default
+                curl_setopt(self::$Curl, CURLOPT_HTTPGET, true);
+
                 break;
 
             case 'POST':
@@ -116,24 +110,43 @@ class Curler
                 // allows DELETE, PATCH etc.
                 curl_setopt(self::$Curl, CURLOPT_CUSTOMREQUEST, $requestType);
         }
+
+        $this->Headers->UnsetHeader('Content-Type');
+
+        // in debug mode, collect request headers
+        curl_setopt(self::$Curl, CURLINFO_HEADER_OUT, $this->Debug);
     }
 
-    private function AddData( array $data = null, $asJson = true)
+    private function SetData( ? array $data, bool $asJson)
     {
-        if ($asJson)
+        $query    = '';
+        $hasFile  = false;
+
+        if ( ! is_null($data))
         {
-            if ( ! is_null($data))
+            array_walk_recursive($data,
+
+            function ( & $item, $key) use ( & $hasFile)
             {
-                $this->Headers->SetHeader('Content-Type', 'application/json');
+                if ($item instanceof CurlerFile)
+                {
+                    $item     = $item->GetCurlFile();
+                    $hasFile  = true;
+                }
             }
 
-            curl_setopt(self::$Curl, CURLOPT_POSTFIELDS, is_null($data) ? '' : json_encode($data));
-        }
-        else
-        {
-            $query = '';
+            );
 
-            if ( ! is_null($data))
+            if ($hasFile)
+            {
+                $query = $data;
+            }
+            elseif ($asJson)
+            {
+                $this->Headers->SetHeader('Content-Type', 'application/json');
+                $query = json_encode($data);
+            }
+            else
             {
                 $query = $this->HttpBuildQuery($data);
             }
@@ -142,36 +155,59 @@ class Curler
         }
     }
 
-    private function Execute()
+    private function Execute() : string
     {
         // add headers for authentication etc.
         curl_setopt(self::$Curl, CURLOPT_HTTPHEADER, $this->Headers->GetHeaders());
 
-        if ($this->Debug)
-        {
-            curl_setopt(self::$Curl, CURLINFO_HEADER_OUT, true);
-        }
+        // clear any previous response headers
+        self::$ResponseHeaders = array();
 
         // execute the request
         $result = curl_exec(self::$Curl);
 
+        // save transfer information
+        $this->LastCurlInfo         = curl_getinfo(self::$Curl);
+        $this->LastResponseHeaders  = self::$ResponseHeaders;
+
         if ($result === false)
         {
-            throw new Exception('cURL error: ' . curl_error(self::$Curl) . ($this->Debug ? ' ' . json_encode(curl_getinfo(self::$Curl)) : ''));
+            $this->LastResponse      = null;
+            $this->LastResponseCode  = null;
+            throw new CurlerException('cURL error: ' . curl_error(self::$Curl), $this);
+        }
+
+        $this->LastResponse      = $result;
+        $this->LastResponseCode  = (int)curl_getinfo(self::$Curl, CURLINFO_RESPONSE_CODE);
+
+        if ($this->LastResponseCode >= 400)
+        {
+            throw new CurlerException("HTTP error " . $this->LastResponseHeaders [
+                'status'
+            ]??$this->LastResponseCode, $this);
         }
 
         return $result;
     }
 
-    private function Close()
-    {
-        $this->LastResponseHeaders = self::$ResponseHeaders;
-        $this->Reset();
-    }
-
-    public function GetBaseUrl()
+    public function GetBaseUrl() : string
     {
         return $this->BaseUrl;
+    }
+
+    public function GetHeaders() : CurlerHeader
+    {
+        return $this->Headers;
+    }
+
+    public function GetDebug() : bool
+    {
+        return $this->Debug;
+    }
+
+    public function GetNoNumericKeys() : bool
+    {
+        return $this->NoNumericKeys;
     }
 
     public function EnableDebug()
@@ -194,85 +230,85 @@ class Curler
         $this->NoNumericKeys = true;
     }
 
-    public function Get( array $queryString = null)
+    public function Get( array $queryString = null) : string
     {
         $this->Initialise('GET', $queryString);
-        $result = $this->Execute();
-        $this->Close();
 
-        return $result;
+        return $this->Execute();
     }
 
-    public function GetJson( array $queryString = null)
+    public function GetJson( array $queryString = null) : ? array
     {
         return json_decode($this->Get($queryString), true);
     }
 
-    public function Post( array $data = null, array $queryString = null)
+    public function Post( array $data = null, array $queryString = null, bool $dataAsJson = true) : string
     {
         $this->Initialise('POST', $queryString);
+        $this->SetData($data, $dataAsJson);
 
-        if ( ! is_null($data))
-        {
-            $this->AddData($data);
-        }
-
-        $result = $this->Execute();
-        $this->Close();
-
-        return $result;
+        return $this->Execute();
     }
 
-    public function PostJson( array $data = null, array $queryString = null)
+    public function PostJson( array $data = null, array $queryString = null, bool $dataAsJson = true) : ? array
     {
-        return json_decode($this->Post($data, $queryString), true);
+        return json_decode($this->Post($data, $queryString, $dataAsJson), true);
     }
 
-    public function Put( array $data = null, array $queryString = null)
+    public function Put( array $data = null, array $queryString = null, bool $dataAsJson = true) : string
     {
         $this->Initialise('PUT', $queryString);
-        $this->AddData($data, false);
-        $result = $this->Execute();
-        $this->Close();
+        $this->SetData($data, $dataAsJson);
 
-        return $result;
+        return $this->Execute();
     }
 
-    public function PutJson( array $data = null, array $queryString = null)
+    public function PutJson( array $data = null, array $queryString = null, bool $dataAsJson = true) : ? array
     {
-        return json_decode($this->Put($data, $queryString), true);
+        return json_decode($this->Put($data, $queryString, $dataAsJson), true);
     }
 
-    public function Patch( array $data = null, array $queryString = null)
+    public function Patch( array $data = null, array $queryString = null, bool $dataAsJson = true) : string
     {
         $this->Initialise('PATCH', $queryString);
-        $this->AddData($data);
-        $result = $this->Execute();
-        $this->Close();
+        $this->SetData($data, $dataAsJson);
 
-        return $result;
+        return $this->Execute();
     }
 
-    public function PatchJson( array $data = null, array $queryString = null)
+    public function PatchJson( array $data = null, array $queryString = null, bool $dataAsJson = true) : ? array
     {
-        return json_decode($this->Patch($data, $queryString), true);
+        return json_decode($this->Patch($data, $queryString, $dataAsJson), true);
     }
 
-    public function Delete( array $queryString = null)
+    public function Delete( array $queryString = null) : string
     {
         $this->Initialise('DELETE', $queryString);
-        $result = $this->Execute();
-        $this->Close();
 
-        return $result;
+        return $this->Execute();
     }
 
-    public function DeleteJson( array $queryString = null)
+    public function DeleteJson( array $queryString = null) : ? array
     {
         return json_decode($this->Delete($queryString), true);
     }
 
-    public function GetLastResponseHeaders()
+    public function GetLastCurlInfo() : ? array
+    {
+        return $this->LastCurlInfo;
+    }
+
+    public function GetLastResponse() : ? string
+    {
+        return $this->LastResponse;
+    }
+
+    public function GetLastResponseCode() : ? int
+    {
+        return $this->LastResponseCode;
+    }
+
+    public function GetLastResponseHeaders() : ? array
     {
         return $this->LastResponseHeaders;
     }
@@ -283,7 +319,7 @@ class Curler
      * @param array $queryString
      * @return array All returned entities.
      */
-    public function GetAllLinked( array $queryString = null)
+    public function GetAllLinked( array $queryString = null) : array
     {
         $this->Initialise('GET', $queryString);
         $entities  = array();
@@ -294,8 +330,7 @@ class Curler
             if ($nextUrl)
             {
                 curl_setopt(self::$Curl, CURLOPT_URL, $nextUrl);
-                self::$ResponseHeaders  = array();
-                $nextUrl                = null;
+                $nextUrl = null;
             }
 
             $result = json_decode($this->Execute(), true);
@@ -303,14 +338,16 @@ class Curler
             // collect data from response and move on to next page
             $entities = array_merge($entities, $result);
 
-            if (isset(self::$ResponseHeaders['Link']) && preg_match('/<([^>]+)>;\s*rel=([\'"])next\2/', self::$ResponseHeaders['Link'], $matches))
+            if (isset($this->LastResponseHeaders [
+                'link'
+            ]) && preg_match('/<([^>]+)>;\s*rel=([\'"])next\2/', $this->LastResponseHeaders [
+                'link'
+            ], $matches))
             {
                 $nextUrl = $matches[1];
             }
         }
         while ($nextUrl);
-
-        $this->Close();
 
         return $entities;
     }
@@ -322,7 +359,7 @@ class Curler
      * @param array $queryString
      * @return array All returned entities.
      */
-    public function GetAllLinkedByEntity($entityName, array $queryString = null)
+    public function GetAllLinkedByEntity($entityName, array $queryString = null) : array
     {
         $this->Initialise('GET', $queryString);
         $entities  = array();
@@ -347,8 +384,6 @@ class Curler
             }
         }
         while ($nextUrl);
-
-        $this->Close();
 
         return $entities;
     }
