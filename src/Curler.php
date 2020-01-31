@@ -95,12 +95,14 @@ class Curler
         {
             case 'GET':
 
+                curl_setopt(self::$Curl, CURLOPT_CUSTOMREQUEST, null);
                 curl_setopt(self::$Curl, CURLOPT_HTTPGET, true);
 
                 break;
 
             case 'POST':
 
+                curl_setopt(self::$Curl, CURLOPT_CUSTOMREQUEST, null);
                 curl_setopt(self::$Curl, CURLOPT_POST, true);
 
                 break;
