@@ -419,10 +419,11 @@ class Curler
 
         do
         {
-            $result      = $this->PostJson($nextQuery);
-            $nextQuery   = null;
-            $cursor      = null;
-            $entityName  = array_shift(array_keys($result['data']?? []));
+            $result       = $this->PostJson($nextQuery);
+            $nextQuery    = null;
+            $cursor       = null;
+            $entityNames  = array_keys($result['data']?? []);
+            $entityName   = array_shift($entityNames);
 
             if ( ! $entityName)
             {
