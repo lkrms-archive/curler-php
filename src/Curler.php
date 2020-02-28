@@ -257,6 +257,20 @@ class Curler
         return json_decode($this->Post($data, $queryString, $dataAsJson), true);
     }
 
+    public function RawPost(string $data, string $contentType, array $queryString = null) : string
+    {
+        $this->Initialise('POST', $queryString);
+        $this->Headers->SetHeader('Content-Type', $contentType);
+        curl_setopt(self::$Curl, CURLOPT_POSTFIELDS, $data);
+
+        return $this->Execute();
+    }
+
+    public function RawPostJson(string $data, string $contentType, array $queryString = null) : ? array
+    {
+        return json_decode($this->RawPost($data, $contentType, $queryString), true);
+    }
+
     public function Put( array $data = null, array $queryString = null, bool $dataAsJson = true) : string
     {
         $this->Initialise('PUT', $queryString);
@@ -386,6 +400,58 @@ class Curler
             }
         }
         while ($nextUrl);
+
+        return $entities;
+    }
+
+    public function GetByGraphQL(string $query, array $variables = null, bool $paginated = false) : array
+    {
+        if ($paginated && ! (($variables['first']??null) && array_key_exists('after', $variables)))
+        {
+            throw new CurlerException('$first and $after variables are required for pagination', $this);
+        }
+
+        $entities   = array();
+        $nextQuery  = array(
+            'query'     => $query,
+            'variables' => $variables,
+        );
+
+        do
+        {
+            $result      = $this->PostJson($nextQuery);
+            $nextQuery   = null;
+            $cursor      = null;
+            $entityName  = array_shift(array_keys($result['data']?? []));
+
+            if ( ! $entityName)
+            {
+                throw new CurlerException('no data returned', $this);
+            }
+
+            $data = array_map(
+
+            function ($entity) use ( & $cursor)
+            {
+                $cursor = $entity['cursor']??null;
+                unset($entity['cursor']);
+
+                return $entity['node']??$entity;
+            }
+
+            , $result['data'][$entityName]['edges']?? []);
+            $entities = array_merge($entities, $data);
+
+            if ($paginated && $cursor && ($result['data'][$entityName]['pageInfo']['hasNextPage']??false))
+            {
+                $variables['after']  = $cursor;
+                $nextQuery           = array(
+                    'query'     => $query,
+                    'variables' => $variables,
+                );
+            }
+        }
+        while ($nextQuery);
 
         return $entities;
     }
