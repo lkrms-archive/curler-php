@@ -184,9 +184,9 @@ class Curler
 
         if ($this->LastResponseCode >= 400)
         {
-            throw new CurlerException("HTTP error " . $this->LastResponseHeaders [
+            throw new CurlerException("HTTP error " . ($this->LastResponseHeaders [
                 'status'
-            ]??$this->LastResponseCode, $this);
+            ]??$this->LastResponseCode), $this);
         }
 
         return $result;
