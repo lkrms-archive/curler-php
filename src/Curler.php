@@ -404,52 +404,84 @@ class Curler
         return $entities;
     }
 
-    public function GetByGraphQL(string $query, array $variables = null, bool $paginated = false) : array
+    private static function CollateNested($data, array $path = null, array & $entities = null)
     {
-        if ($paginated && ! (($variables['first']??null) && array_key_exists('after', $variables)))
+        if (empty($path))
+        {
+            $entities = array_merge($entities?? [], is_array($data) ? $data : [
+                $data
+            ]);
+        }
+        elseif (is_array($data))
+        {
+            foreach ($data as $nested)
+            {
+                self::CollateNested($nested, $path, $entities);
+            }
+        }
+        else
+        {
+            $field = array_shift($path);
+
+            // gracefully skip missing data
+            if (isset($data->$field))
+            {
+                self::CollateNested($data->$field, $path, $entities);
+            }
+        }
+    }
+
+    public function GetByGraphQL(string $query, array $variables = null, string $entityPath = null, string $pagePath = null, callable$filter = null) : array
+    {
+        if ( ! is_null($pagePath) && ! (($variables['first']??null) && array_key_exists('after', $variables)))
         {
             throw new CurlerException('$first and $after variables are required for pagination', $this);
         }
 
-        $entities   = array();
-        $nextQuery  = array(
+        $entities   = [];
+        $nextQuery  = [
             'query'     => $query,
             'variables' => $variables,
-        );
+        ];
 
         do
         {
-            $result       = $this->PostJson($nextQuery);
-            $nextQuery    = null;
-            $cursor       = null;
-            $entityNames  = array_keys($result['data']?? []);
-            $entityName   = array_shift($entityNames);
+            $result = json_decode($this->Post($nextQuery));
 
-            if ( ! $entityName)
+            if ( ! isset($result->data))
             {
                 throw new CurlerException('no data returned', $this);
             }
 
-            $data = array_map(
+            $nextQuery  = null;
+            $objects    = [];
+            self::CollateNested($result->data, is_null($entityPath) ? null : explode('.', $entityPath), $objects);
 
-            function ($entity) use ( & $cursor)
+            if ($filter)
             {
-                $cursor = $entity['cursor']??null;
-                unset($entity['cursor']);
-
-                return $entity['node']??$entity;
+                $objects = array_filter($objects, $filter);
             }
 
-            , $result['data'][$entityName]['edges']?? []);
-            $entities = array_merge($entities, $data);
+            $entities = array_merge($entities, $objects);
 
-            if ($paginated && $cursor && ($result['data'][$entityName]['pageInfo']['hasNextPage']??false))
+            if ( ! is_null($pagePath))
             {
-                $variables['after']  = $cursor;
-                $nextQuery           = array(
-                    'query'     => $query,
-                    'variables' => $variables,
-                );
+                $page = [];
+                self::CollateNested($result->data, is_null($pagePath) ? null : explode('.', $pagePath), $page);
+
+                if (count($page) != 1 || ! isset($page[0]->pageInfo->endCursor) || ! isset($page[0]->pageInfo->hasNextPage))
+                {
+                    throw new CurlerException('paginationPath did not resolve to a single object with pageInfo.endCursor and pageInfo.hasNextPage fields', $this);
+                }
+
+                if ($page[0]->pageInfo->hasNextPage)
+                {
+                    $variables['after']  = $page[0]->pageInfo->endCursor;
+                    $nextQuery           = [
+                        'query'     => $query,
+                        'variables' => $variables,
+                    ];
+                }
             }
         }
         while ($nextQuery);
