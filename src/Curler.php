@@ -297,16 +297,17 @@ class Curler
         return json_decode($this->Patch($data, $queryString, $dataAsJson), true);
     }
 
-    public function Delete( array $queryString = null) : string
+    public function Delete( array $data = null, array $queryString = null, bool $dataAsJson = true) : string
     {
         $this->Initialise('DELETE', $queryString);
+        $this->SetData($data, $dataAsJson);
 
         return $this->Execute();
     }
 
-    public function DeleteJson( array $queryString = null) : ? array
+    public function DeleteJson( array $data = null, array $queryString = null, bool $dataAsJson = true) : ? array
     {
-        return json_decode($this->Delete($queryString), true);
+        return json_decode($this->Delete($data, $queryString, $dataAsJson), true);
     }
 
     public function GetLastCurlInfo() : ? array
